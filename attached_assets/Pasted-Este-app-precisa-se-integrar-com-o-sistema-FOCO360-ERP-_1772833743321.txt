@@ -1,0 +1,141 @@
+Este app precisa se integrar com o sistema FOCO360 (ERP do Instituto Foco) para controle de acesso e consumo de recursos dos clientes.
+
+Configuração
+Criar uma variável de ambiente chamada FOCO360_API_KEY com a API Key do produto cadastrado no FOCO360 (formato pk_...).
+
+A URL base da API é: https://foco360.replit.app
+
+Fluxo de Integração
+1. SSO (Login Único via Portal FOCO360)
+Quando o cliente clica no produto pelo portal do FOCO360, ele é redirecionado para a URL deste app com um parâmetro ?sso_token=XXXXX. O app precisa:
+
+Capturar o sso_token da URL
+Verificar o token chamando a API do FOCO360
+Se válido, criar a sessão do cliente no app
+POST https://foco360.replit.app/api/external/sso/verify
+Header: X-API-Key: {FOCO360_API_KEY}
+Body: { "token": "token_recebido_na_url" }
+Resposta (200):
+{
+  "success": true,
+  "client": {
+    "id": "uuid",
+    "name": "Nome do Cliente",
+    "email": "cliente@email.com",
+    "company": "Empresa"
+  },
+  "usage": {
+    "limit": 100,
+    "count": 5,
+    "remaining": 95
+  }
+}
+Erro (401): { "success": false, "message": "Token inválido ou expirado" }
+2. Verificar se o cliente pode usar um recurso (antes de executar a ação)
+Chamar este endpoint ANTES de permitir que o cliente use o recurso (ex: antes de gerar uma pesquisa, criar um evento, etc.):
+
+GET https://foco360.replit.app/api/external/check?email={email_do_cliente}&resourceType=uses
+Header: X-API-Key: {FOCO360_API_KEY}
+Resposta (200):
+{
+  "success": true,
+  "canCreate": true,
+  "resourceType": "uses",
+  "usage": 5,
+  "limit": 100,
+  "remaining": 95,
+  "unlimited": false
+}
+Se canCreate for false, bloquear a ação e mostrar mensagem que o limite foi atingido.
+
+3. Consumir recurso (depois que o cliente usou)
+Chamar este endpoint DEPOIS que a ação foi executada com sucesso (ex: depois de gerar a pesquisa):
+
+POST https://foco360.replit.app/api/external/consume
+Header: X-API-Key: {FOCO360_API_KEY}
+Body: {
+  "email": "cliente@email.com",
+  "resourceType": "uses",
+  "amount": 1
+}
+Resposta (200):
+{
+  "success": true,
+  "resourceType": "uses",
+  "usage": 6,
+  "limit": 100,
+  "remaining": 94,
+  "unlimited": false
+}
+Erro (403 - limite excedido):
+{
+  "success": false,
+  "message": "Limite de uses excedido",
+  "usage": 100,
+  "limit": 100,
+  "remaining": 0
+}
+4. Ver todos os limites do cliente (para exibir dashboard/status)
+GET https://foco360.replit.app/api/external/entitlements?email={email_do_cliente}
+Header: X-API-Key: {FOCO360_API_KEY}
+Resposta (200):
+{
+  "success": true,
+  "client": { "id": "uuid", "name": "Nome", "email": "email", "company": "Empresa" },
+  "product": { "id": "uuid", "code": "codigo", "name": "Nome do Produto" },
+  "entitlements": [
+    {
+      "resourceType": "uses",
+      "usage": 5,
+      "limit": 100,
+      "remaining": 95,
+      "unlimited": false,
+      "canCreate": true,
+      "renewable": true,
+      "renewalDays": 30,
+      "lastResetAt": "2026-01-01T00:00:00Z",
+      "expiresAt": "2026-12-31T00:00:00Z"
+    }
+  ]
+}
+5. Login direto (alternativa ao SSO)
+Se o app precisar de login próprio (email + senha) usando as credenciais do FOCO360:
+
+POST https://foco360.replit.app/api/external/auth
+Header: X-API-Key: {FOCO360_API_KEY}
+Body: { "email": "cliente@email.com", "password": "senha" }
+Resposta (200):
+{
+  "success": true,
+  "client": { "id": "uuid", "name": "Nome", "email": "email", "company": "Empresa" },
+  "product": { "code": "codigo", "name": "Nome do Produto" },
+  "usage": { "count": 5, "limit": 100, "remaining": 95 }
+}
+6. Esqueci minha senha
+POST https://foco360.replit.app/api/external/forgot-password
+Body: { "email": "cliente@email.com", "resetUrl": "https://meuapp.com" }
+POST https://foco360.replit.app/api/external/reset-password
+Body: { "token": "token_do_email", "newPassword": "nova_senha" }
+Tipos de Recursos (resourceType)
+Valor	Descrição	Renovável
+access	Acessos ao sistema	Sim
+uses	Usos gerais (padrão)	Sim
+records	Registros criados	Sim
+users	Usuários/participantes	Não
+events	Eventos	Não
+enrollments	Matrículas	Não
+Use o resourceType que faz mais sentido para o app. Para a maioria dos apps simples, usar uses é suficiente.
+
+Resumo do Fluxo
+Cliente acessa o app (via SSO do portal ou login direto)
+Antes de cada ação principal → chamar /check para ver se tem limite
+Se canCreate: true → executar a ação → chamar /consume para descontar
+Se canCreate: false → mostrar mensagem de limite atingido
+Opcionalmente, mostrar dashboard com /entitlements
+Tratamento de Erros
+Todos os endpoints retornam { "success": false, "message": "..." } em caso de erro. Os códigos HTTP importantes são:
+
+401: API Key inválida ou não fornecida
+403: Sem permissão (cliente inativo, sem acesso, limite excedido)
+404: Cliente não encontrado ou sem acesso ao produto
+500: Erro interno
